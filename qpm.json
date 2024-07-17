@@ -50,12 +50,12 @@
   "dependencies": [
     {
       "id": "bs-cordl",
-      "versionRange": "3500.*",
+      "versionRange": "3700.*",
       "additionalData": {}
     },
     {
       "id": "beatsaber-hook",
-      "versionRange": "^5.1.6",
+      "versionRange": "^5.1.9",
       "additionalData": {}
     },
     {
@@ -67,12 +67,12 @@
     },
     {
       "id": "custom-types",
-      "versionRange": "^0.17.7",
+      "versionRange": "^0.17.10",
       "additionalData": {}
     },
     {
       "id": "bsml",
-      "versionRange": "^0.4.25",
+      "versionRange": "^0.4.43",
       "additionalData": {}
     },
     {
@@ -82,7 +82,7 @@
     },
     {
       "id": "paper",
-      "versionRange": "^3.6.3",
+      "versionRange": "^3.6.4",
       "additionalData": {}
     }
   ]
