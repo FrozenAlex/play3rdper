@@ -6,7 +6,7 @@
   "coverImage": "cover.png",
   "author": "ComputerElite",
   "packageId": "com.beatgames.beatsaber",
-  "packageVersion": "1.40.4_5283",
+  "packageVersion": "1.40.6_6407",
   "lateModFiles": ["${binary}"],
   "libraryFiles": [],
   "dependencies": [],
