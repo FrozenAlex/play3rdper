@@ -8,6 +8,7 @@
       "id": "Play3rdPer",
       "version": "0.13.0",
       "url": null,
+      "ndk": "^27.2.12479018",
       "additionalData": {
         "overrideSoName": "libPlay3rdPer.so",
         "cmake": true
