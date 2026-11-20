@@ -66,5 +66,4 @@ extern.cmake
 # QMOD Schema
 mod.json.schema
 
-# Clang cache
-.cache/
+.cache
