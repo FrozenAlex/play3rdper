@@ -61,7 +61,7 @@ void DidActivate(ViewController* self, bool firstActivation, bool addedToHierarc
         //Enable later once replay is out
          /*DisableWhileReplay
         auto DisableWhileReplayPress = il2cpp_utils::MakeDelegate<UnityEngine::Events::UnityAction_1<bool>*>(
-                   classof(UnityEngine::Events::UnityAction_1<bool>*), this, SetDisableWhileReplay);
+                   i2c::class_of<UnityEngine::Events::UnityAction_1<bool>*>(), this, SetDisableWhileReplay);
         UnityEngine::UI::Toggle* DisableWhileReplayObject = CreateToggle(container->get_transform(), "Disable while viewing Replays", getConfig().config["DisableWhileReplay"].GetBool(), DisableWhileReplayPress);
         AddHoverHint(DisableWhileReplayObject->get_gameObject(), "While viewing a replay, the Replay mod has it's own camera control system! Enabling this setting will result in Third person mod being disabled while you view a replay.");
         */

@@ -2,16 +2,19 @@
 #include "ModConfig.hpp"
 #include "logging.hpp"
 #include "GlobalNamespace/LightManager.hpp"
+#include "UnityEngine/Rendering/ScriptableRenderContext.hpp"
 #include "GlobalNamespace/VRController.hpp"
 #include "GlobalNamespace/Saber.hpp"
 #include "GlobalNamespace/OVRInput.hpp"
 #include "GlobalNamespace/AudioTimeSyncController.hpp"
 
-#include "beatsaber-hook/shared/utils/hooking.hpp"
-#include "beatsaber-hook/shared/utils/il2cpp-type-check.hpp"
+#include "beatsaber-hook/shared/hooking.hpp"
+#include "beatsaber-hook/shared/types.hpp"
 
 #include "UnityEngine/Transform.hpp"
-#include "UnityEngine/Resources.hpp"
+#include "UnityEngine/EntityId.hpp"
+#include "UnityEngine/FindObjectsSortMode.hpp"
+#include "UnityEngine/Time.hpp"
 #include "UnityEngine/Camera.hpp"
 #include "UnityEngine/GameObject.hpp"
 #include "UnityEngine/Quaternion.hpp"
@@ -51,54 +54,96 @@ UnityEngine::Matrix4x4 TranslateMatrix(UnityEngine::Vector3 vector)
             return result;
         }
 
-VRController* rightController = nullptr;
-VRController* leftController = nullptr;
-UnityEngine::Vector3 saberRot;
-UnityEngine::Vector3 saberPos;
+namespace {
+struct ControllerLookup {
+    UnityEngine::EntityId id{0};
+    int retryFrame = 0;
+};
 
-UnityEngine::Vector3 prevPos = UnityEngine::Vector3(0.0f, 0.0f, 0.0f);
+ControllerLookup leftController, rightController;
+UnityEngine::EntityId cullingCameraId{0};
+int previousMovementSource = 0;
+UnityEngine::Vector3 prevPos;
+
+UnityW<VRController> FindController(bool right) {
+    auto& lookup = right ? rightController : leftController;
+    if (lookup.id.m_Data != 0) {
+        auto controller = UnityEngine::Object::FindObjectFromInstanceID(lookup.id).try_cast<VRController>();
+        if (controller && controller->get_isActiveAndEnabled()) return controller;
+        lookup = {};
+    }
+
+    const int currentFrame = UnityEngine::Time::get_frameCount();
+    if (currentFrame < lookup.retryFrame) return nullptr;
+    lookup.retryFrame = currentFrame + 60;
+    auto node = right ? UnityEngine::XR::XRNode::RightHand : UnityEngine::XR::XRNode::LeftHand;
+    auto controllers = UnityEngine::Object::FindObjectsByType(
+        i2c::cs_type_of<VRController*>(), UnityEngine::FindObjectsSortMode::None);
+    for (auto object : controllers) {
+        auto controller = object.try_cast<VRController>();
+        if (controller && controller->get_isActiveAndEnabled() && controller->get_node() == node) {
+            lookup.id = controller->GetEntityId();
+            return controller;
+        }
+    }
+    return nullptr;
+}
+
+void UpdateMovementOffset(UnityEngine::Camera* camera, UnityEngine::Vector3 position) {
+    auto source = getModConfig().MoveController.GetValue();
+    int sourceId = camera->GetInstanceID();
+    if (source != 0) {
+        auto controller = FindController(source != 1);
+        if (!controller) {
+            previousMovementSource = 0;
+            return;
+        }
+        position = controller->get_position();
+        sourceId = controller->GetInstanceID();
+    }
+    OVRInput::Update();
+    if (sourceId == previousMovementSource && OVRInput::Get(OVRInput::Button::Four, OVRInput::Controller::Touch)) {
+        auto delta = UnityEngine::Vector3::op_Subtraction(position, prevPos);
+        auto multiplier = getModConfig().MoveMultiplier.GetValue();
+        getModConfig().XOffset.SetValue(getModConfig().XOffset.GetValue() + delta.x * multiplier);
+        getModConfig().YOffset.SetValue(getModConfig().YOffset.GetValue() + delta.y * multiplier);
+        getModConfig().ZOffset.SetValue(getModConfig().ZOffset.GetValue() + delta.z * multiplier);
+    }
+    previousMovementSource = sourceId;
+    prevPos = position;
+}
+
+void ResetCullingOverride() {
+    if (cullingCameraId.m_Data == 0) return;
+    auto camera = UnityEngine::Object::FindObjectFromInstanceID(cullingCameraId).try_cast<UnityEngine::Camera>();
+    if (camera) camera->ResetCullingMatrix();
+    cullingCameraId = UnityEngine::EntityId{0};
+}
+}
 
 bool replay = false;
-bool shouldGetControllers = true;
 float rotated = 0.0f;
 int framesPressed = 0;
 int frame = 0;
 
-MAKE_HOOK_MATCH(LightManager_OnWillRenderObject, &LightManager::OnCameraPreRender, void, LightManager* self, UnityEngine::Camera* camera) {
-    // Do stuff when this function is called 
-    LightManager_OnWillRenderObject(self, camera);
+MAKE_HOOK_MATCH(LightManager_OnWillRenderObject, &LightManager::OnCameraPreRender, void, LightManager* self, UnityEngine::Rendering::ScriptableRenderContext context, UnityEngine::Camera* camera) {
+    LightManager_OnWillRenderObject(self, context, camera);
     
-    if (!getModConfig().Active.GetValue()) return; // If the mod is not active, do nothing
+    if (!getModConfig().Active.GetValue()) {
+        ResetCullingOverride();
+        previousMovementSource = 0;
+        return;
+    }
 
     auto mainCamera = UnityEngine::Camera::get_main();
-    if (!mainCamera || camera != mainCamera.unsafePtr()) return; // Only run for the main camera 
+    if (!mainCamera || camera != mainCamera.unsafe_ptr()) return;
 
     frame++;
     if(frame < 20) return;
     frame = 20;
 
-    if(shouldGetControllers) {
-        ArrayW controllers = UnityEngine::Resources::FindObjectsOfTypeAll<VRController*>();
-        for (int i = 0; i < controllers.size(); i++) {
-            if(controllers[i]->get_node() == UnityEngine::XR::XRNode::LeftHand) {
-                leftController = controllers[i];
-            } else if(controllers[i]->get_node() == UnityEngine::XR::XRNode::RightHand){
-                rightController = controllers[i];
-            }
-        }
-        shouldGetControllers = false;
-    }
-
   UnityEngine::Vector3 rot = mainCamera->get_transform()->get_eulerAngles();
   UnityEngine::Vector3 pos = mainCamera->get_transform()->get_position();
-
-  if(getModConfig().LeftSaber.GetValue() && getModConfig().SwapSaber.GetValue() && rightController != nullptr) {
-        saberPos = rightController->get_position();
-        saberRot = rightController->get_rotation().get_eulerAngles();
-    } else if(getModConfig().LeftSaber.GetValue() && leftController != nullptr) {
-        saberPos = leftController->get_position();
-        saberRot = leftController->get_rotation().get_eulerAngles();
-    }
 
     if(GlobalNamespace::OVRInput::Get(GlobalNamespace::OVRInput::Button::One, OVRInput::Controller::Touch) && GlobalNamespace::OVRInput::Get(GlobalNamespace::OVRInput::Button::Two, OVRInput::Controller::Touch) && GlobalNamespace::OVRInput::Get(GlobalNamespace::OVRInput::Button::Three, OVRInput::Controller::Touch) && GlobalNamespace::OVRInput::Get(GlobalNamespace::OVRInput::Button::Four, OVRInput::Controller::Touch) && GlobalNamespace::OVRInput::Get(GlobalNamespace::OVRInput::Button::PrimaryHandTrigger, OVRInput::Controller::Touch) && GlobalNamespace::OVRInput::Get(GlobalNamespace::OVRInput::Button::PrimaryIndexTrigger, OVRInput::Controller::Touch) && GlobalNamespace::OVRInput::Get(GlobalNamespace::OVRInput::Button::SecondaryHandTrigger, OVRInput::Controller::Touch) && GlobalNamespace::OVRInput::Get(GlobalNamespace::OVRInput::Button::SecondaryIndexTrigger, OVRInput::Controller::Touch)) {
         framesPressed++;
@@ -112,33 +157,42 @@ MAKE_HOOK_MATCH(LightManager_OnWillRenderObject, &LightManager::OnCameraPreRende
             getModConfig().WashingMachine.SetValue(false);
             getModConfig().Active.SetValue(false);
             framesPressed = 0;
+            previousMovementSource = 0;
+            ResetCullingOverride();
+            return;
         }
     }
     else if(getModConfig().MoveWhilePlaying.GetValue()) {
-        UnityEngine::Vector3 diffPos = getModConfig().MoveController.GetValue() == 0 ? mainCamera->get_transform()->get_position() : (getModConfig().MoveController.GetValue() == 1 ? leftController->get_position() : rightController->get_position());
-        GlobalNamespace::OVRInput::Update();
-        if(GlobalNamespace::OVRInput::Get(GlobalNamespace::OVRInput::Button::Four, OVRInput::Controller::Touch)) {
-            UnityEngine::Vector3 posDifference = UnityEngine::Vector3::op_Subtraction(diffPos, prevPos);
-
-            getModConfig().XOffset.SetValue(posDifference.x * getModConfig().MoveMultiplier.GetValue() + getModConfig().XOffset.GetValue());
-            getModConfig().YOffset.SetValue(posDifference.y * getModConfig().MoveMultiplier.GetValue() + getModConfig().YOffset.GetValue());
-            getModConfig().ZOffset.SetValue(posDifference.z * getModConfig().MoveMultiplier.GetValue() + getModConfig().ZOffset.GetValue());
-        }
-        prevPos = diffPos;
+        UpdateMovementOffset(camera, pos);
     }
-    else framesPressed = 0;
+    else {
+        framesPressed = 0;
+        previousMovementSource = 0;
+    }
+
+    UnityEngine::Vector3 saberPos{}, saberRot{};
+    if (getModConfig().LeftSaber.GetValue()) {
+        auto controller = FindController(getModConfig().SwapSaber.GetValue());
+        if (!controller) {
+            ResetCullingOverride();
+            return;
+        }
+        saberPos = controller->get_position();
+        saberRot = controller->get_rotation().get_eulerAngles();
+    }
 
     UnityEngine::Vector3 offsetRot = UnityEngine::Vector3(getModConfig().XRot.GetValue(), getModConfig().YRot.GetValue(), getModConfig().ZRot.GetValue());
     UnityEngine::Vector3 offsetPos = UnityEngine::Vector3(getModConfig().XOffset.GetValue(), getModConfig().YOffset.GetValue(), getModConfig().ZOffset.GetValue());
     
-  typedef function_ptr_t<void, UnityEngine::Camera*, UnityEngine::Matrix4x4> type;
-auto method = *reinterpret_cast<type>(il2cpp_functions::resolve_icall("UnityEngine.Camera::set_cullingMatrix_Injected"));
-
-auto vector = UnityEngine::Vector3::op_Multiply(UnityEngine::Vector3::get_forward(), -99999 / 2);
-auto matrix = UnityEngine::Matrix4x4::op_Multiply(UnityEngine::Matrix4x4::Ortho(-99999, 99999, -99999, 99999, 0.001f, 99999), TranslateMatrix(vector));
-matrix = UnityEngine::Matrix4x4::op_Multiply(matrix, mainCamera->get_worldToCameraMatrix());
-
-method(mainCamera, matrix);
+    auto cameraId = mainCamera->GetEntityId();
+    if (cullingCameraId.m_Data != cameraId.m_Data) {
+        ResetCullingOverride();
+        cullingCameraId = cameraId;
+    }
+    auto vector = UnityEngine::Vector3::op_Multiply(UnityEngine::Vector3::get_forward(), -99999 / 2);
+    auto matrix = UnityEngine::Matrix4x4::op_Multiply(UnityEngine::Matrix4x4::Ortho(-99999, 99999, -99999, 99999, 0.001f, 99999), TranslateMatrix(vector));
+    // The public setter marshals the managed Camera to its native Unity object.
+    mainCamera->set_cullingMatrix(UnityEngine::Matrix4x4::op_Multiply(matrix, mainCamera->get_worldToCameraMatrix()));
 
   if(getModConfig().Fixed.GetValue()) {
     if(getModConfig().LeftSaber.GetValue()) { 
@@ -201,7 +255,11 @@ MAKE_HOOK_MATCH(AudioTimeSyncController_Start, &AudioTimeSyncController::Start, 
 }
 
 MAKE_HOOK_MATCH(SceneManager_ActiveSceneChanged, &UnityEngine::SceneManagement::SceneManager::Internal_ActiveSceneChanged, void, UnityEngine::SceneManagement::Scene previousActiveScene, UnityEngine::SceneManagement::Scene nextActiveScene) {
-    shouldGetControllers = true;
+    ResetCullingOverride();
+    leftController = {};
+    rightController = {};
+    previousMovementSource = 0;
+    framesPressed = 0;
     frame = 0;
     SceneManager_ActiveSceneChanged(previousActiveScene, nextActiveScene);
 }
@@ -216,7 +274,7 @@ PLAY_3RD_PERSON_EXPORT void setup(CModInfo* info) {
 }
 
 PLAY_3RD_PERSON_EXPORT void late_load() {
-    il2cpp_functions::Init();
+    i2c::functions::initialize();
 
     Logger.info("Installing hooks...");
     

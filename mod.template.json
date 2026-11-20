@@ -6,10 +6,13 @@
   "coverImage": "cover.png",
   "author": "ComputerElite",
   "packageId": "com.beatgames.beatsaber",
-  "packageVersion": "1.40.8_7379",
+  "packageVersion": "1.45.3_30054",
   "description": "Play in 3rd Person!",
-  "lateModFiles": ["${binary}"],
+  "lateModFiles": [
+    "${binary}"
+  ],
   "libraryFiles": [],
   "dependencies": [],
-  "fileCopies": []
+  "fileCopies": [],
+  "modloader": "Scotland2"
 }
